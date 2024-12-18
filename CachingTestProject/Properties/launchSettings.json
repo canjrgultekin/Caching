@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CachingTestProject": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
