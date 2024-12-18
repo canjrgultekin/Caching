@@ -1,10 +1,9 @@
 ﻿using Caching.Interfaces;
 using Caching.Options;
+using Caching.Security;
 using Microsoft.Extensions.Caching.Memory;
 using OpenTelemetry.Metrics;
 using System.Diagnostics.Metrics;
-
-namespace Caching.Providers;
 
 public class MemoryCacheService : ICacheService
 {
@@ -12,11 +11,13 @@ public class MemoryCacheService : ICacheService
     private readonly Counter<int> _cacheHitCounter;
     private readonly Counter<int> _cacheMissCounter;
     private readonly bool _metricsEnabled;
+    private readonly AesEncryptionService _encryptionService;
 
-    public MemoryCacheService(IMemoryCache cache, CacheOptions options, MeterProvider meterProvider = null)
+    public MemoryCacheService(IMemoryCache cache, CacheOptions options, MeterProvider meterProvider = null, AesEncryptionService encryptionService = null)
     {
         _cache = cache;
         _metricsEnabled = options.MetricsEnabled;
+        _encryptionService = encryptionService;
 
         if (_metricsEnabled && meterProvider != null)
         {
@@ -28,16 +29,18 @@ public class MemoryCacheService : ICacheService
 
     public Task SetAsync<T>(string key, T value, TimeSpan expiry, CachePolicy policy = null)
     {
-        _cache.Set(key, value, expiry);
+        var data = _encryptionService != null ? _encryptionService.Encrypt(value.ToString()) : value.ToString();
+        _cache.Set(key, data, expiry);
         return Task.CompletedTask;
     }
 
     public Task<T> GetAsync<T>(string key)
     {
-        if (_cache.TryGetValue(key, out T value))
+        if (_cache.TryGetValue(key, out string data))
         {
             if (_metricsEnabled) _cacheHitCounter?.Add(1);
-            return Task.FromResult(value);
+            var decryptedData = _encryptionService != null ? _encryptionService.Decrypt(data) : data;
+            return Task.FromResult((T)Convert.ChangeType(decryptedData, typeof(T)));
         }
 
         if (_metricsEnabled) _cacheMissCounter?.Add(1);

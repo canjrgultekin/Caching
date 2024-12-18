@@ -1,5 +1,6 @@
 ﻿using Caching.Interfaces;
 using Caching.Options;
+using Caching.Security;
 using Caching.Serialization;
 using OpenTelemetry.Metrics;
 using StackExchange.Redis;
@@ -10,16 +11,18 @@ namespace Caching.Providers;
 public class RedisCacheService : ICacheService
 {
     private readonly IDatabase _database;
-    private readonly ISerializer _serializer;
+    public ISerializer Serializer { get; } // Dışarıya erişim için public özellik
     private readonly Counter<int> _cacheHitCounter;
     private readonly Counter<int> _cacheMissCounter;
     private readonly bool _metricsEnabled;
+    private readonly AesEncryptionService _encryptionService;
 
-    public RedisCacheService(CacheOptions options, ISerializer serializer, MeterProvider meterProvider = null)
+    public RedisCacheService(CacheOptions options, ISerializer serializer, MeterProvider meterProvider = null, AesEncryptionService encryptionService = null)
     {
         var redis = ConnectionMultiplexer.Connect(options.ConnectionString);
         _database = redis.GetDatabase();
-        _serializer = serializer;
+        Serializer = serializer; // Özellik olarak atanıyor
+        _encryptionService = encryptionService;
         _metricsEnabled = options.MetricsEnabled;
 
         if (_metricsEnabled && meterProvider != null)
@@ -32,7 +35,12 @@ public class RedisCacheService : ICacheService
 
     public async Task SetAsync<T>(string key, T value, TimeSpan expiry, CachePolicy policy = null)
     {
-        var serialized = _serializer.Serialize(value);
+        var serialized = Serializer.Serialize(value);
+        if (_encryptionService != null)
+        {
+            serialized = _encryptionService.Encrypt(serialized);
+        }
+
         await _database.StringSetAsync(key, serialized, expiry);
     }
 
@@ -42,7 +50,9 @@ public class RedisCacheService : ICacheService
         if (data.HasValue)
         {
             if (_metricsEnabled) _cacheHitCounter?.Add(1);
-            return _serializer.Deserialize<T>(data);
+
+            var decryptedData = _encryptionService != null ? _encryptionService.Decrypt(data) : data.ToString();
+            return Serializer.Deserialize<T>(decryptedData);
         }
 
         if (_metricsEnabled) _cacheMissCounter?.Add(1);
@@ -54,3 +64,4 @@ public class RedisCacheService : ICacheService
         return await _database.KeyDeleteAsync(key);
     }
 }
+
